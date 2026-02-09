@@ -55,11 +55,10 @@ export async function magentoRestGet<T = unknown>(
   const httpAuth = getMagentoHttpAuth();
   const res = await fetch(`${MAGENTO_BASE}/rest/V1${endpoint}`, {
     headers: {
-      // When HTTP auth is configured, send both as comma-separated value.
-      // nginx consumes the Basic part; Magento receives the Bearer part.
-      Authorization: httpAuth
-        ? `${httpAuth}, Bearer ${token}`
-        : `Bearer ${token}`,
+      // When HTTP auth is configured, keep Basic in Authorization (for nginx)
+      // and send Bearer via X-Magento-Token (read by .htaccess rewrite).
+      Authorization: httpAuth || `Bearer ${token}`,
+      ...(httpAuth ? { "X-Magento-Token": `Bearer ${token}` } : {}),
       "Content-Type": "application/json",
     },
     next: { revalidate: 300 }, // cache for 5 min
@@ -84,9 +83,8 @@ export async function magentoRestPost<T = unknown>(
   const res = await fetch(`${MAGENTO_BASE}/rest/V1${endpoint}`, {
     method: "POST",
     headers: {
-      Authorization: httpAuth2
-        ? `${httpAuth2}, Bearer ${token}`
-        : `Bearer ${token}`,
+      Authorization: httpAuth2 || `Bearer ${token}`,
+      ...(httpAuth2 ? { "X-Magento-Token": `Bearer ${token}` } : {}),
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),

@@ -53,14 +53,17 @@ export async function POST(request: NextRequest) {
   };
 
   // Forward customer Bearer tokens (but NOT staging Basic auth from browser).
-  // When HTTP auth is configured, combine Basic + Bearer so nginx and Magento
-  // both get what they need.
+  // When HTTP auth is configured, keep Basic auth in Authorization (for nginx)
+  // and send the Bearer token via X-Magento-Token (read by .htaccess rewrite).
   const authorization = request.headers.get("authorization");
   if (authorization?.startsWith("Bearer ")) {
     const httpAuth = getMagentoHttpAuth();
-    headers["Authorization"] = httpAuth
-      ? `${httpAuth}, ${authorization}`
-      : authorization;
+    if (httpAuth) {
+      headers["Authorization"] = httpAuth;
+      headers["X-Magento-Token"] = authorization;
+    } else {
+      headers["Authorization"] = authorization;
+    }
   }
 
   // Forward store code header
