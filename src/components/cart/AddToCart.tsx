@@ -68,6 +68,7 @@ export function AddToCart({
 
       setAdded(true);
       addToast(`Added ${quantity} item${quantity > 1 ? "s" : ""} to cart`, "success");
+      window.dispatchEvent(new Event("cart-updated"));
       setTimeout(() => setAdded(false), 3000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to add to cart";

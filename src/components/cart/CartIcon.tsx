@@ -1,29 +1,44 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useQuery } from "@apollo/client/react";
 import { CART_QUERY } from "@/lib/graphql/queries/cart";
 import { getCartToken } from "@/lib/cart/cartToken";
-import { useSyncExternalStore } from "react";
-
-const subscribe = (cb: () => void) => {
-  window.addEventListener("storage", cb);
-  return () => window.removeEventListener("storage", cb);
-};
 
 export function CartIcon() {
-  const cartId = useSyncExternalStore(
-    subscribe,
-    () => getCartToken(),
-    () => null,
-  );
+  const [cartId, setCartId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCartId(getCartToken());
+
+    function onCartUpdate() {
+      setCartId(getCartToken());
+    }
+    window.addEventListener("cart-updated", onCartUpdate);
+    window.addEventListener("storage", onCartUpdate);
+    return () => {
+      window.removeEventListener("cart-updated", onCartUpdate);
+      window.removeEventListener("storage", onCartUpdate);
+    };
+  }, []);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data } = useQuery<any>(CART_QUERY, {
+  const { data, refetch } = useQuery<any>(CART_QUERY, {
     variables: { cartId: cartId || "" },
     skip: !cartId,
     pollInterval: 30000,
   });
+
+  // Refetch cart data when cart-updated fires
+  useEffect(() => {
+    if (!cartId) return;
+    function onCartUpdate() {
+      refetch();
+    }
+    window.addEventListener("cart-updated", onCartUpdate);
+    return () => window.removeEventListener("cart-updated", onCartUpdate);
+  }, [cartId, refetch]);
 
   const count = data?.cart?.total_quantity || 0;
 
