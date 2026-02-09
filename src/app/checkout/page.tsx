@@ -225,9 +225,12 @@ export default function CheckoutPage() {
     if (!form.region) { setError("Please select a state"); return; }
 
     try {
-      await setGuestEmail({
-        variables: { cartId, email: form.email },
-      });
+      // Guest carts need email set explicitly; logged-in customers already have it
+      if (!customerLoggedIn) {
+        await setGuestEmail({
+          variables: { cartId, email: form.email },
+        });
+      }
 
       const addr = {
         firstname: form.firstname,
