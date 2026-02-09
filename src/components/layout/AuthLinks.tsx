@@ -14,6 +14,12 @@ export function AuthLinks() {
 
   useEffect(() => {
     setLoggedIn(isLoggedIn());
+
+    function onAuthChange() {
+      setLoggedIn(isLoggedIn());
+    }
+    window.addEventListener("auth-change", onAuthChange);
+    return () => window.removeEventListener("auth-change", onAuthChange);
   }, []);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -38,10 +38,12 @@ export function setCustomerToken(
     expiresAt: Date.now() + expiresInSec * 1000,
   };
   localStorage.setItem(TOKEN_KEY, JSON.stringify(stored));
+  window.dispatchEvent(new Event("auth-change"));
 }
 
 export function clearCustomerToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+  window.dispatchEvent(new Event("auth-change"));
 }
 
 export function isLoggedIn(): boolean {
