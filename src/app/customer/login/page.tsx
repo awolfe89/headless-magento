@@ -3,12 +3,13 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
  
-import { useMutation } from "@apollo/client/react";
+import { useMutation, useLazyQuery } from "@apollo/client/react";
 import {
   GENERATE_CUSTOMER_TOKEN,
   CREATE_CUSTOMER,
 } from "@/lib/graphql/mutations/customer";
 import { MERGE_CARTS } from "@/lib/graphql/mutations/cart";
+import { CUSTOMER_CART_QUERY } from "@/lib/graphql/queries/cart";
 import { setCustomerToken } from "@/lib/auth/token";
 import { getCartToken, clearCartToken, setCartToken } from "@/lib/cart/cartToken";
 
@@ -48,27 +49,42 @@ export default function LoginRegisterPage() {
   );
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [mergeCarts] = useMutation<any>(MERGE_CARTS);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [fetchCustomerCart] = useLazyQuery<any>(CUSTOMER_CART_QUERY, {
+    fetchPolicy: "network-only",
+  });
 
   const isRegistering = registerLoading || autoLoginLoading;
 
-  /** After login, merge any guest cart into the customer's cart */
-  async function mergeGuestCart() {
+  /** After login, restore the customer's cart (merging any guest cart) */
+  async function restoreCustomerCart() {
     const guestCartId = getCartToken();
-    if (!guestCartId) return;
-    try {
-      const { data } = await mergeCarts({
-        variables: { sourceCartId: guestCartId },
-      });
-      // Store the merged (customer) cart id and clear old guest id
-      if (data?.mergeCarts?.id) {
-        setCartToken(data.mergeCarts.id);
-      } else {
+
+    if (guestCartId) {
+      // Merge guest cart into customer cart
+      try {
+        const { data } = await mergeCarts({
+          variables: { sourceCartId: guestCartId },
+        });
+        if (data?.mergeCarts?.id) {
+          setCartToken(data.mergeCarts.id);
+        }
+      } catch {
         clearCartToken();
       }
-    } catch {
-      // Non-critical — customer can still see their existing cart
-      clearCartToken();
+    } else {
+      // No guest cart — fetch the customer's existing cart
+      try {
+        const { data } = await fetchCustomerCart();
+        if (data?.customerCart?.id) {
+          setCartToken(data.customerCart.id);
+        }
+      } catch {
+        // Non-critical
+      }
     }
+
+    window.dispatchEvent(new Event("cart-updated"));
   }
 
   /* ─── Login handler ─── */
@@ -82,7 +98,7 @@ export default function LoginRegisterPage() {
       });
 
       setCustomerToken(data.generateCustomerToken.token);
-      await mergeGuestCart();
+      await restoreCustomerCart();
       router.push("/account");
     } catch (err) {
       setLoginError(
@@ -117,7 +133,7 @@ export default function LoginRegisterPage() {
       });
 
       setCustomerToken(data.generateCustomerToken.token);
-      await mergeGuestCart();
+      await restoreCustomerCart();
       router.push("/account");
     } catch (err) {
       setRegError(

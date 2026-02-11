@@ -1,5 +1,14 @@
 import { gql } from "@apollo/client";
 
+export const CUSTOMER_CART_QUERY = gql`
+  query CustomerCart {
+    customerCart {
+      id
+      total_quantity
+    }
+  }
+`;
+
 export const CART_QUERY = gql`
   query Cart($cartId: String!) {
     cart(cart_id: $cartId) {
