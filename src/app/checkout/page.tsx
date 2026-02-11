@@ -421,6 +421,17 @@ export default function CheckoutPage() {
       }
     }
 
+    // Check customer token is still valid before placing order
+    if (customerLoggedIn) {
+      const token = getCustomerToken();
+      if (!token) {
+        setError(
+          "Your session has expired. Please refresh the page and log in again to complete your order.",
+        );
+        return;
+      }
+    }
+
     setPlacing(true);
 
     const billingAddr = sameAsBilling ? form : billingForm;
@@ -475,7 +486,12 @@ export default function CheckoutPage() {
 
         const result = await res.json();
         if (!res.ok) {
-          throw new Error(result.error || "Failed to place order");
+          console.error("[Checkout] Place order error:", result);
+          throw new Error(
+            result.details
+              ? `${result.error} — ${result.details}`
+              : result.error || "Failed to place order",
+          );
         }
 
         // Save new carrier account if requested

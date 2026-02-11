@@ -109,12 +109,12 @@ export async function POST(request: NextRequest) {
     // Logged-in customer — use their own token
     endpoint = `${MAGENTO_BASE}/rest/V1/carts/mine/payment-information`;
     bearerToken = customerToken;
+    console.log("[place-order] Flow: customer (carts/mine)");
   } else {
-    // Guest — use admin token to operate on the guest cart
+    // Guest — use cart ID in the URL
     endpoint = `${MAGENTO_BASE}/rest/V1/guest-carts/${encodeURIComponent(cartId)}/payment-information`;
-    // For guest carts the REST API allows anonymous access with the cart ID in the URL
-    // No admin token needed — the cart ID itself is the authentication
     bearerToken = "";
+    console.log("[place-order] Flow: guest (guest-carts/" + cartId + ")");
   }
 
   const httpAuth = getMagentoHttpAuth();
@@ -134,6 +134,24 @@ export async function POST(request: NextRequest) {
     headers["Authorization"] = `Bearer ${bearerToken}`;
   }
 
+  // Log sanitized payload for debugging
+  const debugPayload = {
+    ...payload,
+    paymentMethod: {
+      ...payload.paymentMethod,
+      additional_data: payload.paymentMethod.additional_data
+        ? {
+            ...payload.paymentMethod.additional_data,
+            cc_number: "****",
+            cc_cid: "***",
+            grecaptcha_response: payload.paymentMethod.additional_data.grecaptcha_response ? "[present]" : "[missing]",
+          }
+        : undefined,
+    },
+  };
+  console.log("[place-order] Endpoint:", endpoint);
+  console.log("[place-order] Payload:", JSON.stringify(debugPayload, null, 2));
+
   try {
     const res = await fetch(endpoint, {
       method: "POST",
@@ -144,22 +162,31 @@ export async function POST(request: NextRequest) {
     if (!res.ok) {
       const errorText = await res.text().catch(() => "");
       console.error(
-        `Place order REST error: ${res.status}`,
+        `[place-order] Magento REST error ${res.status}:`,
         errorText,
       );
 
       // Try to parse Magento error message
       let message = "Failed to place order. Please try again.";
+      let details: string | undefined;
       try {
         const parsed = JSON.parse(errorText);
         if (parsed.message) {
           message = parsed.message;
         }
+        // Magento sometimes includes parameters or trace
+        if (parsed.parameters) {
+          details = JSON.stringify(parsed.parameters);
+        }
       } catch {
-        // Use generic message
+        // Non-JSON response — include raw text
+        if (errorText) details = errorText.slice(0, 500);
       }
 
-      return NextResponse.json({ error: message }, { status: res.status });
+      return NextResponse.json(
+        { error: message, details },
+        { status: res.status },
+      );
     }
 
     // Magento returns the order ID (number) as a plain integer on success
