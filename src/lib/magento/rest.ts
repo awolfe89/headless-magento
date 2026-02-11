@@ -97,3 +97,30 @@ export async function magentoRestPost<T = unknown>(
 
   return res.json() as Promise<T>;
 }
+
+/**
+ * Make a PUT request to the Magento REST API.
+ */
+export async function magentoRestPut<T = unknown>(
+  endpoint: string,
+  body: unknown,
+): Promise<T> {
+  const token = await getAdminToken();
+  const httpAuth2 = getMagentoHttpAuth();
+  const res = await fetch(`${MAGENTO_BASE}/rest/V1${endpoint}`, {
+    method: "PUT",
+    headers: {
+      Authorization: httpAuth2 || `Bearer ${token}`,
+      ...(httpAuth2 ? { "X-Magento-Token": `Bearer ${token}` } : {}),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Magento REST PUT ${endpoint}: ${res.status} ${text}`);
+  }
+
+  return res.json() as Promise<T>;
+}

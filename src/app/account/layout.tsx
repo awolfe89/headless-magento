@@ -13,6 +13,7 @@ const navLinks = [
   { label: "Orders", href: "/account/orders" },
   { label: "Reviews", href: "/account/reviews" },
   { label: "Addresses", href: "/account/addresses" },
+  { label: "Shipping Accounts", href: "/account/shipping-accounts" },
   { label: "Quick Order", href: "/quick-order" },
 ];
 

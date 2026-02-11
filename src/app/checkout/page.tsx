@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { proxyMagentoImage } from "@/lib/magento/mediaUrl";
 import { useMutation, useQuery } from "@apollo/client/react";
 import { getCartToken, clearCartToken } from "@/lib/cart/cartToken";
-import { isLoggedIn } from "@/lib/auth/token";
+import { isLoggedIn, getCustomerToken } from "@/lib/auth/token";
 import { CHECKOUT_CART_QUERY } from "@/lib/graphql/queries/checkout";
 import { CUSTOMER_QUERY } from "@/lib/graphql/queries/customer";
 import {
@@ -29,7 +29,25 @@ import {
   validateZip,
   validateEmail,
 } from "@/lib/validation";
+import CreditCardForm, {
+  type CreditCardData,
+  validateCreditCard,
+  MAGENTO_CC_TYPES,
+} from "@/components/checkout/CreditCardForm";
+import CarrierAccountForm, {
+  type CarrierFormData,
+} from "@/components/checkout/CarrierAccountForm";
+import type { SavedCarrierAccount, CarrierValue } from "@/lib/shipping/types";
+import {
+  fetchSavedAccounts,
+  updateSavedAccounts,
+  getLocalAccounts,
+  saveLocalAccounts,
+} from "@/lib/shipping/carrierAccounts";
 import Link from "next/link";
+
+/* ─── reCAPTCHA config (from Sage payment module) ─── */
+const RECAPTCHA_SITE_KEY = "6LdGiowrAAAAAEFozB4BsInwJ3DU1qqe-9pigMk8";
 
 /* ─── Types ─── */
 
@@ -115,12 +133,67 @@ export default function CheckoutPage() {
   const [shippingMethods, setShippingMethods] = useState<ShippingMethod[]>([]);
   const [addressSaved, setAddressSaved] = useState(false);
 
+  // Credit card state
+  const [ccData, setCcData] = useState<CreditCardData>({
+    ccNumber: "",
+    ccExpMonth: "",
+    ccExpYear: "",
+    ccCvv: "",
+    ccType: "unknown",
+  });
+
+  // reCAPTCHA state (required by Sage payment module)
+  const recaptchaRef = useRef<HTMLDivElement>(null);
+  const recaptchaWidgetId = useRef<number | null>(null);
+  const [recaptchaToken, setRecaptchaToken] = useState("");
+  const [recaptchaReady, setRecaptchaReady] = useState(false);
+
   const [customerLoggedIn, setCustomerLoggedIn] = useState(false);
+
+  // PO Number & Carrier account state
+  const [poNumber, setPoNumber] = useState("");
+  const [carrierData, setCarrierData] = useState<CarrierFormData>({
+    carrier: "ups" as CarrierValue,
+    accountNumber: "",
+    savedAccountId: "",
+  });
+  const [savedAccounts, setSavedAccounts] = useState<SavedCarrierAccount[]>([]);
+  const [saveNewAccount, setSaveNewAccount] = useState(false);
 
   useEffect(() => {
     setCartId(getCartToken());
     setCustomerLoggedIn(isLoggedIn());
   }, []);
+
+  // Load reCAPTCHA script
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((window as any).grecaptcha?.render) {
+      setRecaptchaReady(true);
+      return;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).onRecaptchaLoad = () => setRecaptchaReady(true);
+    const script = document.createElement("script");
+    script.src = "https://www.google.com/recaptcha/api.js?onload=onRecaptchaLoad&render=explicit";
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+  }, []);
+
+  // Render reCAPTCHA widget when ready and CC method selected
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const grecaptcha = (window as any).grecaptcha;
+    if (!recaptchaReady || !grecaptcha?.render || !recaptchaRef.current) return;
+    if (recaptchaWidgetId.current !== null) return;
+    recaptchaWidgetId.current = grecaptcha.render(recaptchaRef.current, {
+      sitekey: RECAPTCHA_SITE_KEY,
+      callback: (token: string) => setRecaptchaToken(token),
+      "expired-callback": () => setRecaptchaToken(""),
+    });
+  }, [recaptchaReady, addressSaved, selectedPayment]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, loading: cartLoading } = useQuery<any>(CHECKOUT_CART_QUERY, {
@@ -171,6 +244,18 @@ export default function CheckoutPage() {
       };
     });
   }, [customerData]);
+
+  // Load saved carrier accounts (API for logged-in, localStorage for guests)
+  useEffect(() => {
+    if (customerLoggedIn) {
+      const token = getCustomerToken();
+      if (token) {
+        fetchSavedAccounts(token).then(setSavedAccounts).catch(() => {});
+      }
+    } else {
+      setSavedAccounts(getLocalAccounts());
+    }
+  }, [customerLoggedIn]);
 
   // Mutations
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -247,25 +332,24 @@ export default function CheckoutPage() {
         variables: { cartId, address: addr },
       });
 
-      const methods =
+      const methods: ShippingMethod[] =
         shippingData?.setShippingAddressesOnCart?.cart?.shipping_addresses?.[0]
           ?.available_shipping_methods || [];
       setShippingMethods(methods.filter((m: ShippingMethod) => m.available));
       setAddressSaved(true);
 
-      // Auto-select first method
-      if (methods.length > 0) {
-        const first = methods.find((m: ShippingMethod) => m.available);
-        if (first) {
-          setSelectedShipping(`${first.carrier_code}|${first.method_code}`);
-          await setShippingMethod({
-            variables: {
-              cartId,
-              carrierCode: first.carrier_code,
-              methodCode: first.method_code,
-            },
-          });
-        }
+      // Auto-select: prefer freeshipping (TBD) if available, else first available
+      const available = methods.filter((m: ShippingMethod) => m.available);
+      if (available.length > 0) {
+        const preferred = available.find((m) => m.carrier_code === "freeshipping") || available[0];
+        setSelectedShipping(`${preferred.carrier_code}|${preferred.method_code}`);
+        await setShippingMethod({
+          variables: {
+            cartId,
+            carrierCode: preferred.carrier_code,
+            methodCode: preferred.method_code,
+          },
+        });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save address");
@@ -285,46 +369,184 @@ export default function CheckoutPage() {
     }
   }
 
+  // Derived: is "Ship on My Account" selected?
+  const isShipOnMyAccount =
+    selectedShipping.startsWith("ups|") || selectedShipping.startsWith("flatrate|");
+
+  // The underlying Magento carrier_code to use for "Ship on My Account"
+  // We pick whichever is available (ups preferred, flatrate fallback)
+  const shipOnMyAccountMethod = shippingMethods.find(
+    (m) => m.carrier_code === "ups" || m.carrier_code === "flatrate",
+  );
+
+  // Determine if the selected payment method requires credit card fields
+  const effectivePayment =
+    selectedPayment || data?.cart?.available_payment_methods?.[0]?.code || "";
+  const isCcMethod = effectivePayment === "cps_sagepayments";
+
+  // Save a new carrier account (called after order placement)
+  async function saveCarrierAccount() {
+    const newAcct: SavedCarrierAccount = {
+      id: crypto.randomUUID(),
+      carrier: carrierData.carrier,
+      accountNumber: carrierData.accountNumber,
+      nickname: `${carrierData.carrier.toUpperCase()} ${carrierData.accountNumber}`,
+    };
+    const updated = [...savedAccounts, newAcct];
+    if (customerLoggedIn) {
+      const token = getCustomerToken();
+      if (token) await updateSavedAccounts(token, updated).catch(() => {});
+    } else {
+      saveLocalAccounts(updated);
+    }
+  }
+
   // Place the order
   async function handlePlaceOrder() {
     setError(null);
+
+    const paymentCode = effectivePayment;
+
+    // Validate CC data if paying by credit card
+    if (isCcMethod) {
+      const ccError = validateCreditCard(ccData);
+      if (ccError) {
+        setError(ccError);
+        return;
+      }
+      if (!recaptchaToken) {
+        setError("Please complete the reCAPTCHA verification");
+        return;
+      }
+    }
+
     setPlacing(true);
+
+    const billingAddr = sameAsBilling ? form : billingForm;
+    const billingRegion = usRegions.find(
+      (r) => r.code === billingAddr.region,
+    );
+
     try {
-      // Set billing address
-      const billingAddr = sameAsBilling ? form : billingForm;
-      await setBillingAddress({
-        variables: {
-          cartId,
-          address: {
-            firstname: billingAddr.firstname,
-            lastname: billingAddr.lastname,
-            street: [billingAddr.street0, billingAddr.street1].filter(Boolean),
-            city: billingAddr.city,
-            region: billingAddr.region,
-            postcode: billingAddr.postcode,
-            country_code: billingAddr.country,
-            telephone: billingAddr.telephone,
+      if (isCcMethod) {
+        // ── CC payment via REST API (Sage/Paya module) ──
+        const ccDigits = ccData.ccNumber.replace(/\D/g, "");
+        const customerToken = getCustomerToken();
+
+        const res = await fetch("/api/checkout/place-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cartId,
+            customerToken: customerToken || undefined,
+            email: form.email,
+            paymentMethod: {
+              code: paymentCode,
+              additional_data: {
+                cc_number: ccDigits,
+                cc_exp_month: ccData.ccExpMonth,
+                cc_exp_year: ccData.ccExpYear,
+                cc_cid: ccData.ccCvv,
+                cc_type: MAGENTO_CC_TYPES[ccData.ccType],
+                cc_owner: `${billingAddr.firstname} ${billingAddr.lastname}`,
+                sage_pmnt_meth_option: "",
+                new_use_bill_addr: "1",
+                grecaptcha_response: recaptchaToken,
+              },
+            },
+            billingAddress: {
+              firstname: billingAddr.firstname,
+              lastname: billingAddr.lastname,
+              street: [billingAddr.street0, billingAddr.street1].filter(Boolean),
+              city: billingAddr.city,
+              region_code: billingAddr.region,
+              region_id: billingRegion?.id,
+              postcode: billingAddr.postcode,
+              country_id: billingAddr.country,
+              telephone: billingAddr.telephone,
+            },
+            poNumber: poNumber || undefined,
+            carrierInfo: isShipOnMyAccount
+              ? { carrier: carrierData.carrier, accountNumber: carrierData.accountNumber }
+              : undefined,
+          }),
+        });
+
+        const result = await res.json();
+        if (!res.ok) {
+          throw new Error(result.error || "Failed to place order");
+        }
+
+        // Save new carrier account if requested
+        if (isShipOnMyAccount && saveNewAccount && !carrierData.savedAccountId) {
+          await saveCarrierAccount();
+        }
+
+        clearCartToken();
+        window.dispatchEvent(new Event("cart-change"));
+        router.push(`/checkout/success?order=${result.orderNumber || ""}`);
+      } else {
+        // ── Non-CC payment (Bill Me / other) via GraphQL ──
+        await setBillingAddress({
+          variables: {
+            cartId,
+            address: {
+              firstname: billingAddr.firstname,
+              lastname: billingAddr.lastname,
+              street: [billingAddr.street0, billingAddr.street1].filter(Boolean),
+              city: billingAddr.city,
+              region: billingAddr.region,
+              postcode: billingAddr.postcode,
+              country_code: billingAddr.country,
+              telephone: billingAddr.telephone,
+            },
           },
-        },
-      });
+        });
 
-      // Set payment method
-      const paymentCode = selectedPayment || data?.cart?.available_payment_methods?.[0]?.code || "checkmo";
-      await setPaymentMethod({
-        variables: { cartId, paymentCode },
-      });
+        await setPaymentMethod({
+          variables: { cartId, paymentCode },
+        });
 
-      // Place order
-      const { data: orderData } = await placeOrder({
-        variables: { cartId },
-      });
+        const { data: orderData } = await placeOrder({
+          variables: { cartId },
+        });
 
-      const orderNumber = orderData?.placeOrder?.order?.order_number;
-      clearCartToken();
-      router.push(`/checkout/success?order=${orderNumber || ""}`);
+        const orderNumber = orderData?.placeOrder?.order?.order_number;
+
+        // Post PO + carrier info as order comment (best-effort)
+        const commentLines: string[] = [];
+        if (poNumber) commentLines.push(`PO Number: ${poNumber}`);
+        if (isShipOnMyAccount && carrierData.accountNumber) {
+          const label = carrierData.carrier?.toUpperCase() || "OTHER";
+          commentLines.push(`Ship on Customer Account: ${label} #${carrierData.accountNumber}`);
+        }
+        if (orderNumber && commentLines.length > 0) {
+          fetch("/api/checkout/order-comment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ orderNumber, comment: commentLines.join("\n") }),
+          }).catch(() => {});
+        }
+
+        // Save new carrier account if requested
+        if (isShipOnMyAccount && saveNewAccount && !carrierData.savedAccountId) {
+          await saveCarrierAccount();
+        }
+
+        clearCartToken();
+        window.dispatchEvent(new Event("cart-change"));
+        router.push(`/checkout/success?order=${orderNumber || ""}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to place order");
       setPlacing(false);
+      // Reset reCAPTCHA so user can retry
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (recaptchaWidgetId.current !== null && (window as any).grecaptcha) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).grecaptcha.reset(recaptchaWidgetId.current);
+        setRecaptchaToken("");
+      }
     }
   }
 
@@ -339,6 +561,17 @@ export default function CheckoutPage() {
       billingForm.postcode &&
       billingForm.telephone);
 
+  const ccValid =
+    !isCcMethod ||
+    (ccData.ccNumber.replace(/\D/g, "").length >= 13 &&
+      ccData.ccExpMonth &&
+      ccData.ccExpYear &&
+      ccData.ccCvv.length >= 3 &&
+      recaptchaToken);
+
+  const carrierValid =
+    !isShipOnMyAccount || !!carrierData.accountNumber;
+
   const canPlaceOrder =
     addressSaved &&
     selectedShipping &&
@@ -350,7 +583,9 @@ export default function CheckoutPage() {
     form.region &&
     form.postcode &&
     form.telephone &&
-    billingValid;
+    billingValid &&
+    ccValid &&
+    carrierValid;
 
   // ─── Render ───
 
@@ -564,8 +799,10 @@ export default function CheckoutPage() {
                   </h2>
                 </div>
                 <div className="divide-y divide-gray-100 p-2">
-                  {shippingMethods.map((method) => {
-                    const key = `${method.carrier_code}|${method.method_code}`;
+                  {/* TBD / freeshipping option */}
+                  {shippingMethods.some((m) => m.carrier_code === "freeshipping") && (() => {
+                    const freeMethod = shippingMethods.find((m) => m.carrier_code === "freeshipping")!;
+                    const key = `${freeMethod.carrier_code}|${freeMethod.method_code}`;
                     const isSelected = selectedShipping === key;
                     return (
                       <label
@@ -586,17 +823,85 @@ export default function CheckoutPage() {
                         />
                         <div className="flex-1">
                           <p className="text-sm font-medium text-gray-900">
-                            {method.carrier_title} — {method.method_title}
+                            Shipping Billed on Invoice
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Shipping cost determined and billed upon invoice
                           </p>
                         </div>
-                        <span className="shrink-0 text-sm font-semibold text-gray-900">
-                          {method.amount.value === 0
-                            ? "FREE"
-                            : `$${formatPrice(method.amount.value)}`}
-                        </span>
                       </label>
                     );
-                  })}
+                  })()}
+
+                  {/* Ship on My Account (consolidated ups + flatrate) */}
+                  {shipOnMyAccountMethod && (() => {
+                    const key = `${shipOnMyAccountMethod.carrier_code}|${shipOnMyAccountMethod.method_code}`;
+                    return (
+                      <div>
+                        <label
+                          className={`flex cursor-pointer items-center gap-4 rounded-lg px-4 py-3 transition ${
+                            isShipOnMyAccount
+                              ? "bg-red-50/50 ring-1 ring-red-200"
+                              : "hover:bg-gray-50"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="shipping"
+                            value={key}
+                            checked={isShipOnMyAccount}
+                            onChange={() => handleShippingMethodChange(key)}
+                            className="h-4 w-4 accent-red-600"
+                          />
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-gray-900">
+                              Ship on My Account
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              Use your own UPS, FedEx, or other carrier account
+                            </p>
+                          </div>
+                        </label>
+
+                        {isShipOnMyAccount && (
+                          <div className="px-4 pb-3">
+                            <CarrierAccountForm
+                              data={carrierData}
+                              onChange={setCarrierData}
+                              savedAccounts={savedAccounts}
+                              isLoggedIn={customerLoggedIn}
+                              saveForFuture={saveNewAccount}
+                              onSaveForFutureChange={setSaveNewAccount}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+
+            {/* PO Number */}
+            {addressSaved && (
+              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <div className="flex items-center gap-2 bg-gray-900 px-5 py-3">
+                  <span className="h-3.5 w-[3px] rounded-sm bg-red-600" />
+                  <h2 className="text-xs font-semibold uppercase tracking-[1px] text-gray-400">
+                    PO Number
+                  </h2>
+                </div>
+                <div className="p-5">
+                  <label className="mb-1 block text-xs font-medium text-gray-500">
+                    Purchase Order Number
+                  </label>
+                  <input
+                    type="text"
+                    value={poNumber}
+                    onChange={(e) => setPoNumber(e.target.value)}
+                    placeholder="e.g. PO-2024-001 (optional)"
+                    className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                  />
                 </div>
               </div>
             )}
@@ -648,6 +953,16 @@ export default function CheckoutPage() {
                           );
                         })}
                       </div>
+
+                      {/* Credit card form — shown when CC method is selected */}
+                      {isCcMethod && (
+                        <>
+                          <CreditCardForm data={ccData} onChange={setCcData} />
+                          <div className="mt-4">
+                            <div ref={recaptchaRef} />
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
 
