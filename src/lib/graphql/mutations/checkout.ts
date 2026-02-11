@@ -38,6 +38,7 @@ export const SET_SHIPPING_ADDRESS = gql`
           }
           telephone
           available_shipping_methods {
+            available
             carrier_code
             carrier_title
             method_code
