@@ -335,6 +335,7 @@ export default function CheckoutPage() {
       const methods: ShippingMethod[] =
         shippingData?.setShippingAddressesOnCart?.cart?.shipping_addresses?.[0]
           ?.available_shipping_methods || [];
+      console.log("[Checkout] Available shipping methods:", methods.map((m) => `${m.carrier_code}|${m.method_code} (${m.carrier_title})`));
       setShippingMethods(methods.filter((m: ShippingMethod) => m.available));
       setAddressSaved(true);
 
@@ -878,6 +879,43 @@ export default function CheckoutPage() {
                       </div>
                     );
                   })()}
+
+                  {/* Fallback: any other methods not covered above */}
+                  {shippingMethods
+                    .filter((m) => !["freeshipping", "ups", "flatrate"].includes(m.carrier_code))
+                    .map((method) => {
+                      const key = `${method.carrier_code}|${method.method_code}`;
+                      const isSelected = selectedShipping === key;
+                      return (
+                        <label
+                          key={key}
+                          className={`flex cursor-pointer items-center gap-4 rounded-lg px-4 py-3 transition ${
+                            isSelected
+                              ? "bg-red-50/50 ring-1 ring-red-200"
+                              : "hover:bg-gray-50"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="shipping"
+                            value={key}
+                            checked={isSelected}
+                            onChange={() => handleShippingMethodChange(key)}
+                            className="h-4 w-4 accent-red-600"
+                          />
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-gray-900">
+                              {method.carrier_title} — {method.method_title}
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-sm font-semibold text-gray-900">
+                            {method.amount.value === 0
+                              ? "FREE"
+                              : `$${formatPrice(method.amount.value)}`}
+                          </span>
+                        </label>
+                      );
+                    })}
                 </div>
               </div>
             )}
