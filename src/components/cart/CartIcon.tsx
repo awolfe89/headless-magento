@@ -16,9 +16,11 @@ export function CartIcon() {
       setCartId(getCartToken());
     }
     window.addEventListener("cart-updated", onCartUpdate);
+    window.addEventListener("cart-change", onCartUpdate);
     window.addEventListener("storage", onCartUpdate);
     return () => {
       window.removeEventListener("cart-updated", onCartUpdate);
+      window.removeEventListener("cart-change", onCartUpdate);
       window.removeEventListener("storage", onCartUpdate);
     };
   }, []);
@@ -30,14 +32,18 @@ export function CartIcon() {
     pollInterval: 30000,
   });
 
-  // Refetch cart data when cart-updated fires
+  // Refetch cart data when cart changes
   useEffect(() => {
     if (!cartId) return;
     function onCartUpdate() {
       refetch();
     }
     window.addEventListener("cart-updated", onCartUpdate);
-    return () => window.removeEventListener("cart-updated", onCartUpdate);
+    window.addEventListener("cart-change", onCartUpdate);
+    return () => {
+      window.removeEventListener("cart-updated", onCartUpdate);
+      window.removeEventListener("cart-change", onCartUpdate);
+    };
   }, [cartId, refetch]);
 
   const count = data?.cart?.total_quantity || 0;

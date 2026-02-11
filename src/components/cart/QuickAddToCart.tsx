@@ -52,6 +52,7 @@ export function QuickAddToCart({ sku, stockStatus }: QuickAddToCartProps) {
       }
 
       setState("added");
+      window.dispatchEvent(new Event("cart-updated"));
       setTimeout(() => setState("idle"), 2000);
     } catch {
       setState("error");
