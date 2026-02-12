@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
  
 import { useMutation, useLazyQuery } from "@apollo/client/react";
 import {
@@ -14,7 +13,6 @@ import { setCustomerToken } from "@/lib/auth/token";
 import { getCartToken, clearCartToken, setCartToken } from "@/lib/cart/cartToken";
 
 export default function LoginRegisterPage() {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState<"signin" | "register">("signin");
 
   /* ─── Login state ─── */
@@ -99,7 +97,7 @@ export default function LoginRegisterPage() {
 
       setCustomerToken(data.generateCustomerToken.token);
       await restoreCustomerCart();
-      router.push("/account");
+      window.location.href = "/account";
     } catch (err) {
       setLoginError(
         err instanceof Error ? err.message : "Invalid email or password.",
@@ -134,7 +132,7 @@ export default function LoginRegisterPage() {
 
       setCustomerToken(data.generateCustomerToken.token);
       await restoreCustomerCart();
-      router.push("/account");
+      window.location.href = "/account";
     } catch (err) {
       setRegError(
         err instanceof Error
